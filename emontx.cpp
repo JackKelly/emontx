@@ -146,7 +146,7 @@ private:
         filtered = 0.996*(last_filtered + (sample - last_sample));
         /* line above takes ~0.2 milliseconds
          * I should experiment with integer maths
-         * http://openenergymonitor.org/emon/node/932
+         * http://openenergymonitor.org/emon/node/1629
          * and look into calypso_rae's other ideas:
          * http://openenergymonitor.org/emon/node/841 */
 

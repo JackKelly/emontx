@@ -20,15 +20,15 @@ void loop()
 }
 
 
-/* @return Arduino's VCC voltage in volts.
+/* @return Calibration parameter based on VCC
  *
- * Taken from EmonLib EnergyMonitor::readVcc()
+ * Adapted from EmonLib EnergyMonitor::readVcc()
  *
  * Thanks to http://hacking.majenko.co.uk/making-accurate-adc-readings-on-arduino
  * and Jérôme who alerted us to
  * http://provideyourown.com/2012/secret-arduino-voltmeter-measure-battery-voltage/
  */
-float read_vcc() {
+float get_vcc_ratio() {
 
     // Read 1.1V reference against AVcc
     ADMUX = _BV(REFS0) | _BV(MUX3) | _BV(MUX2) | _BV(MUX1);
@@ -40,89 +40,118 @@ float read_vcc() {
     uint16_t result = ADCL; // read least significant byte
     result |= ADCH << 8; // read most significant byte
     
-    // Back-calculate AVcc in volts
-    // 1.1V*1024 ADC steps http://openenergymonitor.org/emon/node/1186
-    return 1126.4 / result;
+    // 1.1V reference
+    return 1.1 / result;
 }
 
-float get_zero_offset(const float old_offset=517.1)
+
+/**
+ * @return VCC in volts
+ */
+float get_vcc() {
+    // 1024 ADC steps http://openenergymonitor.org/emon/node/1186
+    return get_vcc_ratio() * 1024;
+}
+
+
+class Waveform
 {
-    // Find zero offset by taking an average over 1 second
-    uint64_t accumulator = 0;
-    unsigned int num_samples = 0,
-                 num_wavelengths = 0;
-    const uint32_t deadline = millis() + (1200 * 10);
-    const unsigned int NUM_WAVELENGTHS_TO_SAMPLE = 50 * 10;
+public:
+    Waveform(float _calibration, float _phasecal, byte _pin)
+    : calibration(_calibration), sum(0), phasecal(_phasecal), num_samples(0), pin(_pin)
+    {}
 
-    float last_sample, sample;
-
-    last_sample = analogRead(2);
-    while (utils::in_future(deadline) && num_wavelengths < NUM_WAVELENGTHS_TO_SAMPLE) {
-
-        sample = analogRead(2);
-
-        // Test if we've just crossed zero in a positive-heading direction
-        if (last_sample <= old_offset && sample > old_offset) {
-            num_wavelengths++;
-        }
-
-        if (num_wavelengths) { // don't sample prior to passing the first zero-crossing
-            num_samples++;
-            accumulator += sample;
-        }
-
-        last_sample = sample;
+    void init()
+    {
+        zero_offset = get_zero_offset();
+        prime();
     }
 
-    const float mean = float(accumulator) / num_samples;
-    Serial.print(mean);
-    Serial.print(" ");
-    Serial.print(num_samples);
-    Serial.print(" ");
-    Serial.println(num_wavelengths);
+    /**
+     * Call this to prime the high pass filter if we haven't taken a sample for a while.
+     */
+    void prime()
+    {
+        sum = 0;
+        num_samples = 0;
+        last_sample = analogRead(pin);
+        last_filtered = last_sample - zero_offset;
+    }
 
-    return mean;
-}
+    void take_sample() { sample = analogRead(pin); }
+
+    void process()
+    {
+        filtered = 0.996*(last_filtered + (sample - last_sample)); // this line takes ~0.2 milliseconds
+        last_sample = sample;
+        last_filtered = filtered;
+
+        // Update variables used in RMS calculation
+        sum += (filtered * filtered);
+        num_samples++;
+    }
+
+    const float& get_filtered() { return filtered; }
+
+    float get_phase_shifted()
+    {
+        return last_filtered + phasecal * (filtered - last_filtered);
+    }
+
+    float get_rms_and_reset()
+    {
+        const float ratio = calibration * get_vcc_ratio();
+        const float rms = ratio * sqrt(sum / num_samples);
+        sum = 0;
+        num_samples = 0;
+        return rms;
+    }
+
+private:
+    float calibration, filtered, last_filtered, zero_offset, sum, phasecal;
+    int sample, last_sample;
+    uint16_t num_samples;
+    byte pin;
+
+    /**
+     * Calculate the zero offset by averaging over 1 second of raw samples.
+     */
+    float get_zero_offset()
+    {
+        const uint8_t SECONDS_TO_SAMPLE = 1;
+        const uint32_t deadline = millis() + (1000 * SECONDS_TO_SAMPLE);
+        uint32_t accumulator = 0;
+        uint16_t num_samples = 0;
+
+        while (utils::in_future(deadline)) {
+            num_samples++;
+            accumulator += analogRead(pin);
+        }
+
+        return float(accumulator) / num_samples;
+    }
+
+};
 
 int main(void)
 {
     init();
     setup();
 
-    const float VCAL = 234.26;
-    const float V_RATIO = VCAL * (read_vcc() / 1024.0);
+    Serial.println(get_vcc());
 
-    float filtered_v, last_filtered_v, sample_v;
+    Waveform v(234.26, 1.7, 2);
+    v.init();
 
-    float zero_offset = get_zero_offset();
-
-    int i_sample_v, last_i_sample_v;
-
-    last_filtered_v = last_i_sample_v = analogRead(2) - zero_offset;
-
-    // sample one complete wavelength
+    uint32_t deadline = millis() + 1000;
     while(true) {
-        loop();
-
-        i_sample_v = analogRead(2); // analogRead is blocking and takes ~0.1 milliseconds
-
-        sample_v = i_sample_v - zero_offset;
-
-        //filtered_v = 0.996*(last_filtered_v + (i_sample_v - last_i_sample_v));
-
-        //last_filtered_v = filtered_v;
-        //last_i_sample_v = i_sample_v;
-
-        Serial.println(sample_v);
-        //Serial.print(" ");
-        //Serial.print(filtered_v);
-        //Serial.print(" ");
-        //Serial.println(sample_v - filtered_v);
-
-    /*    if (sample_v < 10 && sample_v > -10) {
-            break;
+        if (utils::in_future(deadline)) {
+            v.take_sample();
+            v.process();
+        } else {
+            Serial.println(v.get_rms_and_reset());
+            deadline = millis() + 1000;
         }
-        */
     }
 
     Serial.println(F("done"));

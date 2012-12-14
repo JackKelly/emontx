@@ -68,25 +68,35 @@ public:
     }
 
     /**
-     * Call this to prime the high pass filter if we haven't taken a sample for a while.
+     * Call this if we haven't taken a sample for a while.
+     * Prime the high pass filter.
      */
     void prime()
     {
+        Serial.print(F("priming high pass filter..."));
         sum = 0;
         num_samples = 0;
+
+        /* Use zero_offset to "prime" the HPF parameters */
         last_sample = analogRead(pin);
         last_filtered = last_sample - zero_offset;
+
+        /* "Dry run" the HPF for half a second to let it stabilise */
+        const uint32_t deadline = millis() + 500;
+        while (utils::in_future(deadline)) {
+            take_sample();
+            filter();
+        }
+        Serial.println(F(" done priming."));
     }
 
     void take_sample() { sample = analogRead(pin); }
 
     void process()
     {
-        filtered = 0.996*(last_filtered + (sample - last_sample)); // this line takes ~0.2 milliseconds
-        last_sample = sample;
-        last_filtered = filtered;
+        filter();
 
-        // Update variables used in RMS calculation
+        /* Update variables used in RMS calculation */
         sum += (filtered * filtered);
         num_samples++;
     }
@@ -129,6 +139,19 @@ private:
         }
 
         return float(accumulator) / num_samples;
+    }
+
+    void filter()
+    {
+        filtered = 0.996*(last_filtered + (sample - last_sample));
+        /* line above takes ~0.2 milliseconds
+         * I should experiment with integer maths
+         * http://openenergymonitor.org/emon/node/932
+         * and look into calypso_rae's other ideas:
+         * http://openenergymonitor.org/emon/node/841 */
+
+        last_sample = sample;
+        last_filtered = filtered;
     }
 
 };

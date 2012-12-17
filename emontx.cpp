@@ -57,9 +57,11 @@ float get_vcc() {
 class Waveform
 {
 public:
-    Waveform(float _calibration, float _phasecal, byte _pin)
-    : calibration(_calibration), sum(0), phasecal(_phasecal), num_samples(0), pin(_pin)
+    Waveform(float _calibration, byte _pin)
+    : calibration(_calibration), sum(0), phasecal(1), num_samples(0), pin(_pin)
     {}
+
+    void set_phasecal(float _phasecal) { phasecal=_phasecal; }
 
     void init()
     {
@@ -117,6 +119,10 @@ public:
         return rms;
     }
 
+    const uint16_t& get_num_samples() { return num_samples; }
+
+    const float& get_calibration() { return calibration; }
+
 private:
     float calibration, filtered, last_filtered, zero_offset, sum, phasecal;
     int sample, last_sample;
@@ -161,19 +167,52 @@ int main(void)
     init();
     setup();
 
+    float sum_p = 0, vcc_ratio, real_power, apparent_power, v_rms, i_rms;
+
     Serial.println(get_vcc());
 
-    Waveform v(234.26, 1.7, 2);
+    Waveform v(234.26, 2);
+    v.set_phasecal(1.7);
     v.init();
+
+    Waveform i(110.0, 3);
+    i.init();
+
+    const float both_calibrations = i.get_calibration() * v.get_calibration();
 
     uint32_t deadline = millis() + 1000;
     while(true) {
         if (utils::in_future(deadline)) {
             v.take_sample();
+            i.take_sample();
+
             v.process();
+            i.process();
+
+            sum_p += v.get_phase_shifted() * i.get_filtered();
         } else {
-            Serial.println(v.get_rms_and_reset());
+            vcc_ratio = get_vcc_ratio();
+            real_power = both_calibrations * vcc_ratio * vcc_ratio * sum_p / v.get_num_samples();
+            if (real_power < 0) real_power = 0;
+            Serial.print("real=");
+            Serial.print(real_power);
+
+            v_rms = v.get_rms_and_reset();
+            i_rms = i.get_rms_and_reset();
+            Serial.print(" vRMS=");
+            Serial.print(v_rms);
+            Serial.print(" iRMS=");
+            Serial.print(i_rms);
+
+            apparent_power = v_rms * i_rms;
+            Serial.print(" apparent=");
+            Serial.print(apparent_power);
+
+            Serial.print(" PF=");
+            Serial.println(apparent_power > 0 ? real_power / apparent_power : 1.0);
+
             deadline = millis() + 1000;
+            sum_p = 0;
         }
     }
 

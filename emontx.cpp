@@ -61,8 +61,8 @@ class Waveform
 {
 public:
     Waveform(float _calibration, byte _pin)
-    : calibration(_calibration), sum(0), phasecal(1), num_samples(0), pin(_pin),
-      num_consecutive_equal(0)
+    : calibration(_calibration), sum(0), phasecal(1), num_samples(0),
+      num_consecutive_equal(0), pin(_pin)
     {
         for (uint8_t i=0; i<3; i++) {
             zero_crossing_times[i] = 0;
@@ -96,9 +96,7 @@ public:
         }
 
         /* Reset counters and accumulators after dry run */
-        num_consecutive_equal = 0;
-        num_samples = 0;
-        sum = 0;
+        reset();
 
         Serial.println(F(" done priming."));
     }
@@ -116,8 +114,14 @@ public:
             update_zero_offset();
         }
 
-        /* Check if we're consuming no current but
-         * zero_offset is incorrect */
+        /* If we're consuming no current then the CT clamp's
+         * zero offset might drift but, because we're consuming no
+         * current, we never cross zero so update_zero_offset()
+         * will not be called to correct zero_offset.  So we need
+         * to explicitly check if we're consuming no current by
+         * checking if multiple consecutive raw samples have the
+         * same value.  If they do then adjust zero_offset so
+         * we correctly report a filtered value of zero. */
         if (sample == last_sample) {
             num_consecutive_equal++;
 
@@ -128,11 +132,6 @@ public:
         } else {
             num_consecutive_equal = 0;
         }
-
-        /* I should experiment with integer maths
-         * http://openenergymonitor.org/emon/node/1629
-         * and look into calypso_rae's other ideas:
-         * http://openenergymonitor.org/emon/node/841 */
 
         /* Remove zero offset */
         last_filtered = filtered;
@@ -145,6 +144,11 @@ public:
 
         /* Update variables used in RMS calculation */
         sum += (filtered * filtered);
+
+        /* TODO: I should experiment with integer maths
+         * http://openenergymonitor.org/emon/node/1629
+         * and look into calypso_rae's other ideas:
+         * http://openenergymonitor.org/emon/node/841 */
     }
 
     const float& get_filtered() { return filtered; }
@@ -158,10 +162,16 @@ public:
     {
         const float ratio = calibration * get_vcc_ratio();
         const float rms = ratio * sqrt(sum / num_samples);
+        reset();
+        return rms;
+    }
+
+    /* Reset counters and accumulators. */
+    void reset()
+    {
         sum = 0;
         num_samples = 0;
         num_consecutive_equal = 0;
-        return rms;
     }
 
     const uint16_t& get_num_samples() { return num_samples; }
@@ -206,8 +216,9 @@ private:
     }
 
     /**
-     * Return true if we've just crossed zero_offset
-     * Also sets in_positive_lobe.
+     * Return true if we've just crossed zero_offset.
+     * Also sets in_positive_lobe according to the lobe
+     * we're just entering.
      */
     bool just_crossed_zero()
     {
@@ -225,16 +236,16 @@ private:
     }
 
     /**
-     * Call this just after crossing zero.
+     * Call this just after crossing zero to update zero_offset.
      */
     void update_zero_offset()
     {
         zero_crossing_times[2] = micros();
 
         if (zero_crossing_times[0] && zero_crossing_times[1]) { // check these aren't zero
-            uint32_t lobe_durations[2];
-            lobe_durations[0] = zero_crossing_times[1] - zero_crossing_times[0];
-            lobe_durations[1] = zero_crossing_times[2] - zero_crossing_times[1];
+            uint32_t lobe_durations[2]; // TODO: don't need to recalc penultimate lobe duration every time
+            lobe_durations[0] = zero_crossing_times[1] - zero_crossing_times[0]; // penultimate lobe
+            lobe_durations[1] = zero_crossing_times[2] - zero_crossing_times[1]; // previous lobe
 
             if (!utils::roughly_equal<uint32_t>(lobe_durations[0], lobe_durations[1], 10)) {
                 if (in_positive_lobe) { // just entered positive lobe

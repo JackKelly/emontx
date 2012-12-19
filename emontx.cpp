@@ -53,7 +53,10 @@ float get_vcc() {
     return get_vcc_ratio() * 1024;
 }
 
-
+/**
+ * A class which abstracts the functionality required for sampling and processing
+ * current and voltage waveforms.
+ */
 class Waveform
 {
 public:
@@ -68,29 +71,24 @@ public:
 
     void set_phasecal(float _phasecal) { phasecal=_phasecal; }
 
-    void init()
-    {
-        zero_offset = calc_zero_offset();
-        prime();
-    }
-
     /**
      * Call this if we haven't taken a sample for a while.
-     * Prime the high pass filter.
+     * Prime the LTAD algorithm.
      */
     void prime()
     {
-        Serial.print(F("priming high pass filter..."));
+        Serial.print(F("priming LTAD..."));
         sum = 0;
         num_samples = 0;
 
-        /* Use zero_offset to "prime" the HPF parameters */
-        last_sample = analogRead(pin);
-        last_filtered = last_sample - zero_offset;
+        /* Use average of 1 second worth of samples to "boot strap" the LTAD algorithm */
+        zero_offset = calc_zero_offset();
 
+        /* Figure out which lobe we're in at the moment */
+        sample = analogRead(pin);
         in_positive_lobe = last_sample > zero_offset;
 
-        /* "Dry run" the HPF for half a second to let it stabilise */
+        /* "Dry run" LTAD for half a second to let it stabilise */
         const uint32_t deadline = millis() + 500;
         while (utils::in_future(deadline)) {
             take_sample();
@@ -101,6 +99,7 @@ public:
 
     void take_sample()
     {
+        last_sample = sample;
         sample = analogRead(pin);
         num_samples++;
     }
@@ -111,7 +110,8 @@ public:
             update_zero_offset();
         }
 
-        /* Check if  */
+        /* Check if we're consuming no current but
+         * zero_offset is incorrect */
         if (sample == last_sample) {
             num_consecutive_equal++;
 
@@ -166,8 +166,8 @@ private:
     uint16_t num_samples, num_consecutive_equal;
     uint32_t zero_crossing_times[3]; /* [0] is two zero crossings ago, [1] is prev zero crossing */
     byte pin;
-    static const uint16_t MAX_NUM_SAMPLES = 200;
-    float samples[MAX_NUM_SAMPLES];
+    static const uint16_t MAX_NUM_SAMPLES = 200; /* Just used for printing raw samples */
+    float samples[MAX_NUM_SAMPLES]; /* Just used for printing raw samples */
 
     /**
      * Calculate the zero offset by averaging over 1 second of raw samples.
@@ -189,20 +189,16 @@ private:
 
     void filter()
     {
-        // filtered = 0.996*(last_filtered + (sample - last_sample));
-        /* line above takes ~0.2 milliseconds
-         * I should experiment with integer maths
+         /* I should experiment with integer maths
          * http://openenergymonitor.org/emon/node/1629
          * and look into calypso_rae's other ideas:
          * http://openenergymonitor.org/emon/node/841 */
 
+        last_filtered = filtered;
         filtered = sample - zero_offset;
 
-        last_sample = sample;
-        last_filtered = filtered;
-
         if (num_samples < MAX_NUM_SAMPLES) {
-            samples[num_samples] = filtered;
+            samples[num_samples] = sample;
         }
     }
 
@@ -274,10 +270,10 @@ int main(void)
 
     /*Waveform v(234.26, 2);
     v.set_phasecal(1.7);
-    v.init();*/
+    v.prime();*/
 
     Waveform i(110.0, 3);
-    i.init();
+    i.prime();
 
     //const float both_calibrations = i.get_calibration() * v.get_calibration();
 

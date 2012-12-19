@@ -92,8 +92,14 @@ public:
         const uint32_t deadline = millis() + 500;
         while (utils::in_future(deadline)) {
             take_sample();
-            filter();
+            process();
         }
+
+        /* Reset counters and accumulators after dry run */
+        num_consecutive_equal = 0;
+        num_samples = 0;
+        sum = 0;
+
         Serial.println(F(" done priming."));
     }
 
@@ -123,7 +129,19 @@ public:
             num_consecutive_equal = 0;
         }
 
-        filter();
+        /* I should experiment with integer maths
+         * http://openenergymonitor.org/emon/node/1629
+         * and look into calypso_rae's other ideas:
+         * http://openenergymonitor.org/emon/node/841 */
+
+        /* Remove zero offset */
+        last_filtered = filtered;
+        filtered = sample - zero_offset;
+
+        /* Save samples for printing to serial port later */
+        if (num_samples < MAX_NUM_SAMPLES) {
+            samples[num_samples] = sample;
+        }
 
         /* Update variables used in RMS calculation */
         sum += (filtered * filtered);
@@ -185,21 +203,6 @@ private:
         }
 
         return float(accumulator) / num_samples;
-    }
-
-    void filter()
-    {
-         /* I should experiment with integer maths
-         * http://openenergymonitor.org/emon/node/1629
-         * and look into calypso_rae's other ideas:
-         * http://openenergymonitor.org/emon/node/841 */
-
-        last_filtered = filtered;
-        filtered = sample - zero_offset;
-
-        if (num_samples < MAX_NUM_SAMPLES) {
-            samples[num_samples] = sample;
-        }
     }
 
     /**

@@ -58,14 +58,19 @@ class Waveform
 {
 public:
     Waveform(float _calibration, byte _pin)
-    : calibration(_calibration), sum(0), phasecal(1), num_samples(0), pin(_pin)
-    {}
+    : calibration(_calibration), sum(0), phasecal(1), num_samples(0), pin(_pin),
+      num_consecutive_equal(0)
+    {
+        for (uint8_t i=0; i<3; i++) {
+            zero_crossing_times[i] = 0;
+        }
+    }
 
     void set_phasecal(float _phasecal) { phasecal=_phasecal; }
 
     void init()
     {
-        zero_offset = get_zero_offset();
+        zero_offset = calc_zero_offset();
         prime();
     }
 
@@ -83,6 +88,8 @@ public:
         last_sample = analogRead(pin);
         last_filtered = last_sample - zero_offset;
 
+        in_positive_lobe = last_sample > zero_offset;
+
         /* "Dry run" the HPF for half a second to let it stabilise */
         const uint32_t deadline = millis() + 500;
         while (utils::in_future(deadline)) {
@@ -92,15 +99,34 @@ public:
         Serial.println(F(" done priming."));
     }
 
-    void take_sample() { sample = analogRead(pin); }
+    void take_sample()
+    {
+        sample = analogRead(pin);
+        num_samples++;
+    }
 
     void process()
     {
+        if (just_crossed_zero()) {
+            update_zero_offset();
+        }
+
+        /* Check if  */
+        if (sample == last_sample) {
+            num_consecutive_equal++;
+
+            if (num_consecutive_equal > 50 &&
+                    !utils::roughly_equal<float>(zero_offset, float(sample), 1.0)) {
+                zero_offset += (sample - zero_offset);
+            }
+        } else {
+            num_consecutive_equal = 0;
+        }
+
         filter();
 
         /* Update variables used in RMS calculation */
         sum += (filtered * filtered);
-        num_samples++;
     }
 
     const float& get_filtered() { return filtered; }
@@ -116,6 +142,7 @@ public:
         const float rms = ratio * sqrt(sum / num_samples);
         sum = 0;
         num_samples = 0;
+        num_consecutive_equal = 0;
         return rms;
     }
 
@@ -130,10 +157,14 @@ public:
         }
     }
 
+    const float& get_zero_offset() { return zero_offset; }
+
 private:
     float calibration, filtered, last_filtered, zero_offset, sum, phasecal;
+    bool in_positive_lobe;
     int sample, last_sample;
-    uint16_t num_samples;
+    uint16_t num_samples, num_consecutive_equal;
+    uint32_t zero_crossing_times[3]; /* [0] is two zero crossings ago, [1] is prev zero crossing */
     byte pin;
     static const uint16_t MAX_NUM_SAMPLES = 200;
     float samples[MAX_NUM_SAMPLES];
@@ -141,7 +172,7 @@ private:
     /**
      * Calculate the zero offset by averaging over 1 second of raw samples.
      */
-    float get_zero_offset()
+    float calc_zero_offset()
     {
         const uint8_t SECONDS_TO_SAMPLE = 1;
         const uint32_t deadline = millis() + (1000 * SECONDS_TO_SAMPLE);
@@ -158,18 +189,75 @@ private:
 
     void filter()
     {
-        filtered = 0.996*(last_filtered + (sample - last_sample));
+        // filtered = 0.996*(last_filtered + (sample - last_sample));
         /* line above takes ~0.2 milliseconds
          * I should experiment with integer maths
          * http://openenergymonitor.org/emon/node/1629
          * and look into calypso_rae's other ideas:
          * http://openenergymonitor.org/emon/node/841 */
 
+        filtered = sample - zero_offset;
+
         last_sample = sample;
         last_filtered = filtered;
 
         if (num_samples < MAX_NUM_SAMPLES) {
-            samples[num_samples] = sample;
+            samples[num_samples] = filtered;
+        }
+    }
+
+    /**
+     * Return true if we've just crossed zero_offset
+     * Also sets in_positive_lobe.
+     */
+    bool just_crossed_zero()
+    {
+        bool just_crossed_zero = false;
+
+        if (last_sample <= zero_offset && sample > zero_offset) {
+            just_crossed_zero = true;
+            in_positive_lobe = true;
+        } else if (last_sample >= zero_offset && sample < zero_offset) {
+            just_crossed_zero = true;
+            in_positive_lobe = false;
+        }
+
+        return just_crossed_zero;
+    }
+
+    /**
+     * Call this just after crossing zero.
+     */
+    void update_zero_offset()
+    {
+        zero_crossing_times[2] = micros();
+
+        if (zero_crossing_times[0] && zero_crossing_times[1]) { // check these aren't zero
+            uint32_t lobe_durations[2];
+            lobe_durations[0] = zero_crossing_times[1] - zero_crossing_times[0];
+            lobe_durations[1] = zero_crossing_times[2] - zero_crossing_times[1];
+
+            if (!utils::roughly_equal<uint32_t>(lobe_durations[0], lobe_durations[1], 10)) {
+                if (in_positive_lobe) { // just entered positive lobe
+                    if (lobe_durations[0] > lobe_durations[1]) { // [0] is +ve, [1] is -ve
+                        zero_offset+= 0.1;
+                    } else {
+                        zero_offset-= 0.1;
+                    }
+                } else { // just entered negative lobe
+                    if (lobe_durations[0] > lobe_durations[1]) { // [0] is -ve, [1] is +ve
+                        zero_offset-= 0.1;
+                    } else {
+                        zero_offset+= 0.1;
+                    }
+
+                }
+            }
+        }
+
+        /* Shuffle zero_crossing_times back 1 */
+        for (uint8_t i=0; i<2; i++) {
+            zero_crossing_times[i] = zero_crossing_times[i+1];
         }
     }
 
@@ -220,7 +308,10 @@ int main(void)
             /*Serial.print(" vRMS=");
             Serial.print(v_rms);*/
             Serial.print(" iRMS=");
-            Serial.println(i_rms);
+            Serial.print(i_rms);
+
+            Serial.print(" ZO=");
+            Serial.println(i.get_zero_offset());
 /*
             apparent_power = v_rms * i_rms;
             Serial.print(" apparent=");

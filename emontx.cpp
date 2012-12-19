@@ -123,11 +123,20 @@ public:
 
     const float& get_calibration() { return calibration; }
 
+    void print_samples()
+    {
+        for (uint16_t i=0; i<MAX_NUM_SAMPLES; i++) {
+            Serial.println(samples[i]);
+        }
+    }
+
 private:
     float calibration, filtered, last_filtered, zero_offset, sum, phasecal;
     int sample, last_sample;
     uint16_t num_samples;
     byte pin;
+    static const uint16_t MAX_NUM_SAMPLES = 200;
+    float samples[MAX_NUM_SAMPLES];
 
     /**
      * Calculate the zero offset by averaging over 1 second of raw samples.
@@ -158,6 +167,10 @@ private:
 
         last_sample = sample;
         last_filtered = filtered;
+
+        if (num_samples < MAX_NUM_SAMPLES) {
+            samples[num_samples] = sample;
+        }
     }
 
 };
@@ -171,46 +184,51 @@ int main(void)
 
     Serial.println(get_vcc());
 
-    Waveform v(234.26, 2);
+    /*Waveform v(234.26, 2);
     v.set_phasecal(1.7);
-    v.init();
+    v.init();*/
 
     Waveform i(110.0, 3);
     i.init();
 
-    const float both_calibrations = i.get_calibration() * v.get_calibration();
+    //const float both_calibrations = i.get_calibration() * v.get_calibration();
 
     uint32_t deadline = millis() + 1000;
     while(true) {
         if (utils::in_future(deadline)) {
-            v.take_sample();
+            // v.take_sample();
             i.take_sample();
 
-            v.process();
+            // v.process();
             i.process();
 
-            sum_p += v.get_phase_shifted() * i.get_filtered();
+            // sum_p += v.get_phase_shifted() * i.get_filtered();
         } else {
-            vcc_ratio = get_vcc_ratio();
+            i.print_samples();
+
+            Serial.print("N=");
+            Serial.print(i.get_num_samples());
+
+            /*vcc_ratio = get_vcc_ratio();
             real_power = both_calibrations * vcc_ratio * vcc_ratio * sum_p / v.get_num_samples();
             if (real_power < 0) real_power = 0;
-            Serial.print("real=");
+            Serial.print(" real=");
             Serial.print(real_power);
 
-            v_rms = v.get_rms_and_reset();
+            v_rms = v.get_rms_and_reset(); */
             i_rms = i.get_rms_and_reset();
-            Serial.print(" vRMS=");
-            Serial.print(v_rms);
+            /*Serial.print(" vRMS=");
+            Serial.print(v_rms);*/
             Serial.print(" iRMS=");
-            Serial.print(i_rms);
-
+            Serial.println(i_rms);
+/*
             apparent_power = v_rms * i_rms;
             Serial.print(" apparent=");
             Serial.print(apparent_power);
 
             Serial.print(" PF=");
             Serial.println(apparent_power > 0 ? real_power / apparent_power : 1.0);
-
+*/
             deadline = millis() + 1000;
             sum_p = 0;
         }

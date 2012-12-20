@@ -289,7 +289,7 @@ int main(void)
     Waveform i(110.0, 3);
     i.prime();
 
-    //const float both_calibrations = i.get_calibration() * v.get_calibration();
+    // const float both_calibrations = i.get_calibration() * v.get_calibration();
 
     uint32_t deadline = millis() + 1000;
     while(true) {
@@ -338,3 +338,107 @@ int main(void)
     Serial.println(F("done"));
     Serial.end();
 }
+
+void convert_to_bytes(const uint16_t& input, byte* output)
+{
+    output[0] = input >> 8; // MSB
+    output[1] = input & 0x00FF; // LSB
+}
+
+void convert_to_bytes(const uint32_t& input, byte* output)
+{
+    convert_to_bytes(uint16_t(input >> 16), output);
+    convert_to_bytes(uint16_t(input && 0x0000FFFF), output+2);
+}
+
+/**
+ * Represents a single data point of calculated data.
+ * Typically recorded once per second.
+ */
+class Datum
+{
+public:
+    Datum(): i_rms(0), v_rms(0), real_power(0) {}
+
+    void set(float _i_rms, float _v_rms, float _real_power)
+    {
+        i_rms = round(_i_rms/512);
+        v_rms = round(_v_rms/32);
+        real_power = round(_real_power/64);
+    }
+
+    /* data is an output variable. It should point to an 8-byte array. */
+    void pack_for_tx(byte* data)
+    {
+        convert_to_bytes(i_rms, data); // all of real_power
+        data[2] = v_rms >> 3; // MS 8 bits of v_rms
+        data[3] = v_rms << 5; // LS 3 bits of v_rms
+        data[3] |= real_power >> 16; // MS 5 bits of real_power
+        convert_to_bytes(uint16_t(real_power && 0x0000FFFF), data+4);
+    }
+
+private:
+    uint16_t i_rms; /* 0=0A, 1=1/512A, ..., FFFF=128A */
+
+    uint16_t v_rms; /* 11bit
+                     *   0=197V (230V-14%),
+                     *   1=197 + 1/32V, ...,
+                     * 7FF=261V (230V+14%) */
+
+    uint32_t real_power; /* 21bit
+                          *      0=0W,
+                          *      1=1/64W, ...,
+                          * 1FFFFF=32768W (142A at 230V) */
+};
+
+
+#include <Packet.h>
+/**
+ * Represents a collection six of Datums
+ * This is the quantity of data sent per data packet.
+ *
+ * Number of bytes = 6B preamble + 2B sync +
+ *    1B packet type + 1B ID + 4B first_datum_time +
+ *    6 Datums x 8 bytes per Datum + 1B chk + 2B tail
+ */
+class DataPacket : public TXPacket<65>
+{
+public:
+    DataPacket()
+    {
+        reset();
+        packet[PACKET_TYPE_I] = 0x0E; // For "Open Energy" Monitor
+        // TODO: add header and tail.
+    }
+
+    void reset() { i_next_datum = 0; }
+
+    void add_datum(const Datum& datum)
+    {
+        if (i_next_datum == 0) {
+            convert_to_bytes(millis(), packet+TIME_I); // record time
+        }
+
+        if (!is_full()) {
+            byte data[8];
+            datum.pack_for_tx(data);
+            convert_to_bytes(data, packet+FIRST_DATUM_I+(i_next_datum*DATUM_LENGTH));
+            i_next_datum++;
+        }
+    }
+
+    bool is_full() { return i_next_datum == NUM_DATUMS; }
+
+    void add_checksum()
+    {
+        packet[CHK_I] = modular_sum(packet+PACKET_TYPE_I, 54);
+    }
+
+private:
+    static enum {PACKET_TYPE_I=8, ID_I=9, TIME_I=10,
+                 FIRST_DATUM_I=14, CHK_I=63, DATUM_LENGTH=8};
+
+    static const uint8_t NUM_DATUMS = 6;
+    uint8_t i_next_datum;
+
+};

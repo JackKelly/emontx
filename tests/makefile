@@ -7,13 +7,21 @@ CXX = g++
 CXXFLAGS := -Wall -MMD -g -O0 -D TESTING -I$(emon_tx_dir) -I$(nanode_rf_utils_dir)
 LINK = ${CXX} $^ -lboost_unit_test_framework -o $@ && ./$@
 
-# RULES
-all: CircularBuffer_test
+# TARGETS
+EXECS = CircularBuffer_test
 
+# RULE FOR all
+all: $(EXECS)
+
+# DEPENDENCIES FOR LINKING STEP
 CircularBuffer_test: CircularBuffer_test.o
-	$(LINK)
 
-# Include dependency files:
+
+# LINKING STEP:
+$(EXECS):
+	${CXX} $^ -lboost_unit_test_framework -o $@ && ./$@
+
+# INCLUDE COMPILATION DEPENDENCIES
 -include *.d
 -include ../*.d
 

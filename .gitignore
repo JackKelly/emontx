@@ -23,4 +23,4 @@ Release
 
 screenlog.0
 
-*_test
+tests/*_test

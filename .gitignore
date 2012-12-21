@@ -21,3 +21,6 @@ Release
 *.d
 *.*~
 
+screenlog.0
+
+*_test

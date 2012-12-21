@@ -1,17 +1,22 @@
-compile = g++ -Wall -g -c -O0 -D TESTING -I/home/jack/workspace/avr/emontx $<
-link = g++ -Wall -g -O0 -D TESTING 
+# DIRECTORIES
+nanode_rf_utils_dir = /home/jack/workspace/avr/nanode_rf_utils
+emon_tx_dir = /home/jack/workspace/avr/emontx
 
-#-fno-elide-constructors
-# -I/usr/lib/avr/include/ -D UBRRH -I/usr/lib/avr/include/avr/pgmspace.h -I/usr/share/arduino/hardware/arduino/cores/arduino/ -I/usr/share/arduino/hardware/arduino/variants/standard/
+# COMPILATION AND LINKING VARIABLES
+CXX = g++
+CXXFLAGS := -Wall -MMD -g -O0 -D TESTING -I$(emon_tx_dir) -I$(nanode_rf_utils_dir)
+LINK = ${CXX} $^ -lboost_unit_test_framework -o $@ && ./$@
 
+# RULES
 all: CircularBuffer_test
 
 CircularBuffer_test: CircularBuffer_test.o
-	$(link) $^ -lboost_unit_test_framework -o $@ && ./$@
+	$(LINK)
 
-CircularBuffer_test.o: CircularBuffer_test.cpp ../CircularBuffer.h
-	$(compile)
+# Include dependency files:
+-include *.d
+-include ../*.d
 
-	
+# Clean
 clean:
-	rm -rf *.o CircularBuffer_test
+	rm -rf *.o *_test *.d ../*.o ../*.d
